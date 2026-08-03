@@ -1,0 +1,823 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>RAGE QUEST: The Kind Kingdom</title>
+<style>
+  @font-face {
+    font-family: 'Retro';
+    src: local('Courier New');
+  }
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0; padding: 0; height: 100%;
+    background: #0d0221;
+    display: flex; align-items: center; justify-content: center;
+    font-family: 'Press Start 2P', 'Courier New', monospace;
+    overflow: hidden;
+  }
+  #wrap {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 10px;
+  }
+  #title {
+    color: #ffe94a;
+    text-shadow: 3px 3px 0 #e0218a, -2px -2px 0 #1fc2c9;
+    font-size: 22px;
+    letter-spacing: 2px;
+    text-align: center;
+  }
+  #subtitle {
+    color: #7de3ff;
+    font-size: 9px;
+    letter-spacing: 1px;
+    text-align: center;
+  }
+  #frame {
+    padding: 10px;
+    background: linear-gradient(#3a2a6d, #1b1140);
+    border: 4px solid #ffe94a;
+    box-shadow: 0 0 0 4px #0d0221, 0 0 28px #e0218a99, inset 0 0 20px #00000055;
+    border-radius: 8px;
+  }
+  canvas {
+    image-rendering: pixelated;
+    image-rendering: crisp-edges;
+    display: block;
+    background: #1b1140;
+    border: 2px solid #0d0221;
+    border-radius: 3px;
+  }
+  #hud {
+    display: flex;
+    justify-content: space-between;
+    width: 100%;
+    color: #ffe94a;
+    font-size: 10px;
+    margin-bottom: 6px;
+    letter-spacing: 1px;
+    text-shadow: 1px 1px 0 #0d0221;
+  }
+  #hud span {
+    background: #0d022199;
+    padding: 3px 6px;
+    border-radius: 3px;
+    border: 1px solid #ffe94a44;
+  }
+  #banner {
+    position: absolute;
+    color: #fff;
+    font-size: 14px;
+    text-align: center;
+    background: #000000cc;
+    padding: 14px 20px;
+    border: 3px solid #e0218a;
+    border-radius: 4px;
+    display: none;
+    max-width: 320px;
+    line-height: 1.6;
+  }
+  #banner.show { display: block; }
+  #controls {
+    color: #9a8cc7;
+    font-size: 8px;
+    text-align: center;
+    letter-spacing: 1px;
+  }
+  .flicker {
+    animation: flicker 0.15s infinite alternate;
+  }
+  @keyframes flicker {
+    from { opacity: 1; }
+    to { opacity: 0.7; }
+  }
+</style>
+</head>
+<body>
+<div id="wrap">
+  <div id="title">RAGE QUEST</div>
+  <div id="subtitle">— THE KIND KINGDOM (it lies) —</div>
+  <div id="frame">
+    <div id="hud">
+      <span id="attempts">ATTEMPT: 1</span>
+      <span id="checkpoint">CHECKPOINT: START</span>
+      <span id="timer">TIME: 0.0s</span>
+    </div>
+    <div style="position:relative;">
+      <canvas id="game" width="480" height="270"></canvas>
+      <div id="banner"></div>
+    </div>
+  </div>
+  <div id="controls">ARROW KEYS / A-D TO MOVE · SPACE OR UP TO JUMP · HOLD SHIFT TO SPRINT · R TO RESTART LEVEL</div>
+</div>
+
+<script>
+(() => {
+const canvas = document.getElementById('game');
+const ctx = canvas.getContext('2d');
+ctx.imageSmoothingEnabled = false;
+const W = canvas.width, H = canvas.height;
+const TILE = 15;
+
+const banner = document.getElementById('banner');
+const attemptsEl = document.getElementById('attempts');
+const checkpointEl = document.getElementById('checkpoint');
+const timerEl = document.getElementById('timer');
+
+// ---------- Audio (tiny WebAudio bleeps, no assets needed) ----------
+let actx;
+function beep(freq, dur, type='square', vol=0.05) {
+  try {
+    if (!actx) actx = new (window.AudioContext || window.webkitAudioContext)();
+    const o = actx.createOscillator();
+    const g = actx.createGain();
+    o.type = type;
+    o.frequency.value = freq;
+    g.gain.value = vol;
+    o.connect(g); g.connect(actx.destination);
+    o.start();
+    g.gain.exponentialRampToValueAtTime(0.0001, actx.currentTime + dur);
+    o.stop(actx.currentTime + dur);
+  } catch(e) {}
+}
+const sfx = {
+  jump: () => beep(520, 0.1, 'square', 0.04),
+  death: () => { beep(180, 0.18, 'sawtooth', 0.06); setTimeout(()=>beep(90,0.25,'sawtooth',0.06),90); },
+  troll: () => { beep(300,0.06,'square',0.05); setTimeout(()=>beep(150,0.12,'square',0.05),70); },
+  win: () => { [660,880,990,1320].forEach((f,i)=>setTimeout(()=>beep(f,0.15,'square',0.05), i*90)); },
+  fake: () => { beep(1000,0.05,'triangle',0.05); setTimeout(()=>beep(220,0.2,'square',0.06),50); }
+};
+
+// ---------- Palette ----------
+const COL = {
+  sky1: '#150a35', sky2: '#3a1f68', sky3: '#5c2a7a',
+  mountainFar: '#2a1958', mountainNear: '#3f2270',
+  castle: '#241448',
+  cloud: '#ffffff22',
+  ground: '#e0218a', groundDark: '#8c0f57', groundTop: '#ff5cb3',
+  brick: '#c41876',
+  platform: '#1fc2c9', platformDark: '#0a6b70', platformTop: '#8ff5f9',
+  spike: '#ff4a4a', spikeDark: '#9c1f1f',
+  skin: '#ffcf9e', skinShade: '#e0a878',
+  tunic: '#ffe94a', tunicShade: '#c9a90f',
+  cape: '#e0218a', capeShade: '#a10f66',
+  boots: '#3a2a6d', hair: '#5c3a21',
+  fakeplat: '#7de3ff',
+  flag: '#3ee06b', flagPole: '#cfcfcf',
+  fakeflag: '#3ee06b',
+  text: '#ffffff'
+};
+
+// ---------- Level data ----------
+// Types: 'ground' solid, 'plat' solid platform, 'fake' looks solid, vanishes on touch,
+// 'spike' kills, 'hiddenspike' invisible until triggered (rage classic), 'bounce' launches you,
+// 'reverser' zone that flips controls temporarily, 'checkpoint' saves progress,
+// 'fakeflag' looks like the end but isn't, 'flag' real end.
+const LEVEL_WIDTH = 3600;
+const GROUND_Y = 240;
+
+function rect(x,y,w,h,type,extra={}) { return {x,y,w,h,type,...extra}; }
+
+const solids = [
+  rect(0, GROUND_Y, 300, 30, 'ground'),
+  rect(300, GROUND_Y, 60, 30, 'fake'),               // looks like ground, drops you
+  rect(420, GROUND_Y, 500, 30, 'ground'),
+  rect(560, GROUND_Y-20, 30, 20, 'hiddenspike'),      // invisible spike mid-ground
+  rect(760, 190, 60, 12, 'plat'),
+  rect(860, 160, 60, 12, 'fake'),                     // fake platform mid-air -> pit
+  rect(960, 190, 60, 12, 'plat'),
+  rect(1060, GROUND_Y, 40, 30, 'spike'),
+  rect(1130, GROUND_Y, 260, 30, 'ground', {checkpoint:true, name:'BRIDGE OF LIES'}),
+  rect(1180, GROUND_Y-70, 20, 70, 'reverserzone'),    // control-reverse trap zone (visual pole)
+  rect(1390, GROUND_Y, 60, 30, 'gap'),                // pit (no solid) - death by fall
+  rect(1450, GROUND_Y, 260, 30, 'ground'),
+  rect(1520, 200, 50, 12, 'bounce'),
+  rect(1600, 90, 60, 12, 'plat'),
+  rect(1660, 90, 60, 12, 'fake'),
+  rect(1720, 60, 260, 12, 'plat'),
+  rect(1790, 20, 30, 30, 'hiddenspike'),
+  rect(1980, 60, 40, 12, 'gap'),
+  rect(2050, 60, 300, 12, 'plat', {checkpoint:true, name:'SKY OF BETRAYAL'}),
+  rect(2150, 40, 30, 20, 'fake'),
+  rect(2300, 60, 40, 12, 'gap'),
+  rect(2380, GROUND_Y, 500, 30, 'ground'),
+  rect(2500, GROUND_Y-15, 20, 15, 'spike'),
+  rect(2620, GROUND_Y-15, 20, 15, 'hiddenspike'),
+  rect(2740, GROUND_Y-15, 20, 15, 'spike'),
+  rect(2900, GROUND_Y, 260, 30, 'ground', {checkpoint:true, name:'ONE MORE TRICK...'}),
+  rect(2970, 190, 260, 12, 'fake'),                    // huge inviting fake platform near "end"
+  rect(3120, GROUND_Y, 60, 30, 'gap'),
+  rect(3180, GROUND_Y, 200, 30, 'ground'),
+  rect(3260, GROUND_Y-70, 10, 70, 'fakeflag'),         // fake victory flag - actually a spike trigger
+  rect(3400, GROUND_Y-70, 10, 70, 'flag'),             // real flag
+  rect(3380, GROUND_Y, 220, 30, 'ground'),
+];
+
+const deathQuips = [
+  "You died. The kingdom thanks you for your donation.",
+  "That platform was never your friend.",
+  "Skill issue. Also, the game cheated. Both true.",
+  "You have been eaten by lore.",
+  "Nice jump. Shame about the floor.",
+  "The invisible spike was always there. You just didn't believe hard enough.",
+  "Achievement unlocked: Trust Issues.",
+  "This is fine. Everything is fine.",
+  "You pressed the winning button. It was a trap button.",
+  "Rage quit detected. Respect.",
+];
+
+// ---------- Player ----------
+const player = {
+  x: 20, y: GROUND_Y - 20, w: 14, h: 20,
+  vx: 0, vy: 0,
+  onGround: false,
+  alive: true,
+  reversed: false,
+  reverseTimer: 0,
+  facing: 1,
+  walkPhase: 0,
+  squash: 0, // 0 = normal, positive = squashed (landing), negative = stretched (jump)
+  bob: 0,
+  sprinting: false,
+};
+
+let cameraX = 0;
+let attempts = 1;
+let startTime = performance.now();
+let elapsed = 0;
+let won = false;
+let checkpointX = 20;
+let checkpointName = 'START';
+let shake = 0;
+let bannerTimeout = null;
+let vanished = new Set(); // fake platforms already triggered
+let deathFreeze = false;
+let globalTime = 0;
+
+// ---------- Particles ----------
+let particles = [];
+function spawnParticles(x, y, n, color, opts={}) {
+  for (let i=0;i<n;i++) {
+    particles.push({
+      x, y,
+      vx: (Math.random()-0.5) * (opts.spread || 1.4),
+      vy: -(Math.random()*1.6) - (opts.up || 0.2),
+      life: 1,
+      decay: 0.025 + Math.random()*0.02,
+      color: color,
+      size: opts.size || (1 + Math.random()*2)
+    });
+  }
+}
+function updateParticles() {
+  for (const p of particles) {
+    p.x += p.vx; p.y += p.vy;
+    p.vy += 0.12;
+    p.life -= p.decay;
+  }
+  particles = particles.filter(p => p.life > 0);
+}
+function drawParticles() {
+  for (const p of particles) {
+    ctx.globalAlpha = Math.max(0, p.life);
+    ctx.fillStyle = p.color;
+    ctx.fillRect(p.x, p.y, p.size, p.size);
+  }
+  ctx.globalAlpha = 1;
+}
+
+const keys = {};
+window.addEventListener('keydown', e => {
+  keys[e.key.toLowerCase()] = true;
+  if (e.key === ' ') e.preventDefault();
+  if (e.key.toLowerCase() === 'r') restartLevel(true);
+});
+window.addEventListener('keyup', e => keys[e.key.toLowerCase()] = false);
+
+function showBanner(msg, ms=1600) {
+  banner.textContent = msg;
+  banner.classList.add('show');
+  banner.style.left = '50%';
+  banner.style.top = '40%';
+  banner.style.transform = 'translate(-50%, -50%)';
+  clearTimeout(bannerTimeout);
+  bannerTimeout = setTimeout(() => banner.classList.remove('show'), ms);
+}
+
+function resetPlayerToCheckpoint() {
+  player.x = checkpointX;
+  player.y = GROUND_Y - 20;
+  player.vx = 0; player.vy = 0;
+  player.alive = true;
+  player.reversed = false;
+  player.reverseTimer = 0;
+  vanished.clear();
+  deathFreeze = false;
+}
+
+function restartLevel(manual) {
+  checkpointX = 20;
+  checkpointName = 'START';
+  checkpointEl.textContent = 'CHECKPOINT: START';
+  attempts++;
+  attemptsEl.textContent = 'ATTEMPT: ' + attempts;
+  resetPlayerToCheckpoint();
+  startTime = performance.now();
+  won = false;
+  if (manual) showBanner("Fine. Starting over. Again.", 1200);
+}
+
+function die(reason) {
+  if (!player.alive || deathFreeze) return;
+  player.alive = false;
+  deathFreeze = true;
+  shake = 14;
+  sfx.death();
+  spawnParticles(player.x+player.w/2, player.y+player.h/2, 16, '#ff4a4a', {spread:3, up:1, size:2.5});
+  attempts++;
+  attemptsEl.textContent = 'ATTEMPT: ' + attempts;
+  const quip = deathQuips[Math.floor(Math.random()*deathQuips.length)];
+  showBanner((reason ? reason + "\n" : "") + quip, 1400);
+  setTimeout(() => {
+    resetPlayerToCheckpoint();
+  }, 900);
+}
+
+function win() {
+  if (won) return;
+  won = true;
+  sfx.win();
+  showBanner("...wait, that was the REAL flag?\nYou actually made it.\nTime: " + elapsed.toFixed(1) + "s over " + attempts + " attempt(s).", 5000);
+}
+
+// ---------- Collision helpers ----------
+function aabb(ax,ay,aw,ah, bx,by,bw,bh) {
+  return ax < bx+bw && ax+aw > bx && ay < by+bh && ay+ah > by;
+}
+
+function update(dt) {
+  if (won) return;
+
+  if (!player.alive) return; // frozen during death banner
+
+  // input
+  let left = keys['arrowleft'] || keys['a'];
+  let right = keys['arrowright'] || keys['d'];
+  let jump = keys['arrowup'] || keys['w'] || keys[' '];
+  let sprint = keys['shift'];
+
+  if (player.reversed) { const t = left; left = right; right = t; }
+
+  const SPEED = sprint ? 3.0 : 1.6;
+  const GRAV = 0.35;
+  const JUMP_V = sprint ? -7.1 : -6.6;
+  const FRICTION = 0.8;
+
+  if (left) player.vx = -SPEED;
+  else if (right) player.vx = SPEED;
+  else player.vx *= FRICTION;
+
+  if (left) player.facing = -1;
+  else if (right) player.facing = 1;
+  player.sprinting = sprint && player.onGround && Math.abs(player.vx) > 1.5;
+
+  if (player.sprinting && Math.random() < 0.5) {
+    spawnParticles(player.x + (player.facing>0?0:player.w), player.y + player.h - 2, 1, '#ffffff66', {spread:0.3, up:0.1, size:1.5});
+  }
+
+  if (jump && player.onGround) {
+    player.vy = JUMP_V;
+    player.onGround = false;
+    player.squash = -3;
+    sfx.jump();
+    spawnParticles(player.x + player.w/2, player.y + player.h, 5, '#ffffff88', {spread:1.2, up:0.4, size:2});
+  }
+
+  player.vy += GRAV;
+  if (player.vy > 9) player.vy = 9;
+
+  // horizontal move + collide
+  player.x += player.vx;
+  player.onGround = false;
+
+  for (const s of solids) {
+    if (!isSolidNow(s)) continue;
+    if (aabb(player.x, player.y, player.w, player.h, s.x, s.y, s.w, s.h)) {
+      if (player.vx > 0) player.x = s.x - player.w;
+      else if (player.vx < 0) player.x = s.x + s.w;
+      player.vx = 0;
+    }
+  }
+
+  // vertical move + collide
+  player.y += player.vy;
+  for (const s of solids) {
+    if (!isSolidNow(s)) continue;
+    if (aabb(player.x, player.y, player.w, player.h, s.x, s.y, s.w, s.h)) {
+      if (player.vy > 0) {
+        player.y = s.y - player.h;
+        player.vy = 0;
+        player.onGround = true;
+        onLand(s);
+      } else if (player.vy < 0) {
+        player.y = s.y + s.h;
+        player.vy = 0;
+      }
+    }
+  }
+
+  // hazards & special zones (non-solid overlap checks)
+  for (const s of solids) {
+    const overlap = aabb(player.x, player.y, player.w, player.h, s.x, s.y, s.w, s.h);
+    if (!overlap) continue;
+    if (s.type === 'spike') { die("Spikes. Visible ones. You had one job."); return; }
+    if (s.type === 'hiddenspike') { sfx.troll(); die("A hidden spike. The developer is sorry (lying)."); return; }
+    if (s.type === 'fakeflag') { sfx.fake(); die("Fake flag! Classic. The real one is further right."); return; }
+    if (s.type === 'flag') { win(); return; }
+    if (s.type === 'reverserzone') {
+      player.reversed = true;
+      player.reverseTimer = 2200;
+    }
+    if (s.type === 'checkpoint') {
+      if (checkpointX !== s.x + 4 && s.name !== checkpointName) {
+        checkpointX = s.x + 4;
+        checkpointName = s.name;
+        checkpointEl.textContent = 'CHECKPOINT: ' + s.name;
+        showBanner("Checkpoint: " + s.name, 900);
+      }
+    }
+  }
+
+  if (player.reverseTimer > 0) {
+    player.reverseTimer -= dt;
+    if (player.reverseTimer <= 0) player.reversed = false;
+  }
+
+  // fall death
+  if (player.y > H + 60) { die("Gravity wins again."); return; }
+
+  // camera
+  cameraX = Math.max(0, Math.min(LEVEL_WIDTH - W, player.x - W/2));
+
+  elapsed = (performance.now() - startTime) / 1000;
+  timerEl.textContent = 'TIME: ' + elapsed.toFixed(1) + 's';
+
+  if (shake > 0) shake *= 0.85;
+
+  // walk cycle + squash/stretch + idle bob
+  if (player.onGround && Math.abs(player.vx) > 0.15) {
+    player.walkPhase += Math.abs(player.vx) * (player.sprinting ? 0.55 : 0.35);
+  } else if (player.onGround) {
+    player.bob = Math.sin(globalTime / 220) * 1;
+  }
+  if (!player.onGround) player.bob = 0;
+  player.squash *= 0.8;
+  globalTime += dt;
+
+  updateParticles();
+}
+
+function isSolidNow(s) {
+  if (s.type === 'ground' || s.type === 'plat') return true;
+  if (s.type === 'bounce') return true;
+  if (s.type === 'fake') return !vanished.has(s);
+  return false;
+}
+
+function onLand(s) {
+  if (s.type === 'fake' && !vanished.has(s)) {
+    vanished.add(s);
+    sfx.fake();
+    shake = 6;
+    spawnParticles(player.x+player.w/2, player.y+player.h, 10, '#ff5cb3', {spread:2, size:2});
+  }
+  if (s.type === 'bounce') {
+    player.vy = -11;
+    player.squash = -4;
+    sfx.jump();
+    spawnParticles(player.x+player.w/2, player.y+player.h, 8, '#8ff5f9', {spread:1.6, size:2});
+  }
+  if (player.vy === 0 && s.type !== 'fake' && s.type !== 'bounce') {
+    player.squash = 2.5;
+    if (Math.abs(player.vx) < 3) spawnParticles(player.x+player.w/2, player.y+player.h, 3, '#ffffff55', {spread:0.8, size:1.5});
+  }
+}
+
+// ---------- Rendering ----------
+function drawSpikes(x,y,w,h,color,dark) {
+  const n = Math.max(1, Math.floor(w / 10));
+  const sw = w / n;
+  ctx.fillStyle = dark;
+  for (let i=0;i<n;i++) {
+    ctx.beginPath();
+    ctx.moveTo(x + i*sw, y+h);
+    ctx.lineTo(x + i*sw + sw/2, y);
+    ctx.lineTo(x + i*sw + sw, y+h);
+    ctx.closePath();
+    ctx.fill();
+  }
+  ctx.fillStyle = color;
+  for (let i=0;i<n;i++) {
+    ctx.beginPath();
+    ctx.moveTo(x + i*sw+2, y+h);
+    ctx.lineTo(x + i*sw + sw/2, y+3);
+    ctx.lineTo(x + i*sw + sw-2, y+h);
+    ctx.closePath();
+    ctx.fill();
+  }
+}
+
+function roundedCloud(x, y, w, h) {
+  ctx.beginPath();
+  ctx.ellipse(x, y, w*0.5, h, 0, 0, Math.PI*2);
+  ctx.ellipse(x-w*0.3, y+h*0.3, w*0.3, h*0.7, 0, 0, Math.PI*2);
+  ctx.ellipse(x+w*0.3, y+h*0.3, w*0.35, h*0.7, 0, 0, Math.PI*2);
+  ctx.fill();
+}
+
+function drawMountainRow(offset, baseY, peakW, peakH, seed) {
+  const startI = Math.floor(offset / peakW) - 1;
+  for (let i = startI; i < startI + Math.ceil(W/peakW) + 3; i++) {
+    const h = peakH * (0.6 + 0.4 * Math.abs(Math.sin(i*12.9898*seed)));
+    const x = i*peakW - (offset % peakW);
+    ctx.beginPath();
+    ctx.moveTo(x, baseY);
+    ctx.lineTo(x + peakW/2, baseY - h);
+    ctx.lineTo(x + peakW, baseY);
+    ctx.closePath();
+    ctx.fill();
+  }
+}
+
+function drawCastle(offset, baseY) {
+  const x0 = -(offset % 900) - 900;
+  for (let base = x0; base < W + 900; base += 900) {
+    const bx = base + 900*0;
+    // towers
+    for (let t=0; t<3; t++) {
+      const tx = bx + 60 + t*70;
+      const th = 45 + (t%2)*20;
+      ctx.fillRect(tx, baseY - th, 22, th);
+      // crenellations
+      for (let c=0;c<3;c++) ctx.fillRect(tx + c*8, baseY - th - 6, 5, 6);
+    }
+    // wall
+    ctx.fillRect(bx + 40, baseY - 30, 170, 30);
+  }
+}
+
+function drawGroundTile(s) {
+  ctx.fillStyle = COL.groundDark;
+  ctx.fillRect(s.x, s.y, s.w, s.h);
+  ctx.fillStyle = COL.groundTop;
+  ctx.fillRect(s.x, s.y, s.w, 5);
+  // brick pattern
+  ctx.fillStyle = COL.brick;
+  const bw = 16, bh = 8;
+  for (let row = 0; row * bh < s.h - 5; row++) {
+    const offset = (row % 2 === 0) ? 0 : bw/2;
+    for (let bx = -offset; bx < s.w; bx += bw) {
+      const rx = s.x + bx, ry = s.y + 6 + row*bh;
+      if (rx + bw < s.x || rx > s.x + s.w) continue;
+      const cx = Math.max(rx, s.x), cw = Math.min(rx+bw-2, s.x+s.w) - cx;
+      if (cw > 0 && ry + bh - 2 < s.y + s.h) ctx.fillRect(cx, ry, cw, bh-2);
+    }
+  }
+}
+
+function drawPlatTile(s) {
+  ctx.fillStyle = COL.platformDark;
+  ctx.fillRect(s.x, s.y, s.w, s.h);
+  ctx.fillStyle = COL.platformTop;
+  ctx.fillRect(s.x, s.y, s.w, 3);
+  ctx.fillStyle = COL.platform;
+  ctx.fillRect(s.x, s.y+3, s.w, s.h-3);
+  // rivets
+  ctx.fillStyle = COL.platformDark;
+  for (let rx = s.x+4; rx < s.x+s.w-2; rx += 12) ctx.fillRect(rx, s.y+s.h-4, 2, 2);
+}
+
+function drawCheckpointFlag(x, y) {
+  ctx.fillStyle = '#cfcfcf';
+  ctx.fillRect(x, y-22, 2, 22);
+  const wave = Math.sin(globalTime/180) * 2;
+  ctx.fillStyle = '#ffe94a';
+  ctx.beginPath();
+  ctx.moveTo(x+2, y-22);
+  ctx.lineTo(x+14+wave, y-18);
+  ctx.lineTo(x+2, y-13);
+  ctx.closePath();
+  ctx.fill();
+}
+
+function render() {
+  ctx.save();
+  const sx = (Math.random()-0.5) * shake;
+  const sy = (Math.random()-0.5) * shake;
+  ctx.clearRect(0,0,W,H);
+
+  // sky gradient
+  const g = ctx.createLinearGradient(0,0,0,H);
+  g.addColorStop(0, COL.sky1);
+  g.addColorStop(0.6, COL.sky2);
+  g.addColorStop(1, COL.sky3);
+  ctx.fillStyle = g;
+  ctx.fillRect(0,0,W,H);
+
+  // twinkling stars (very distant, barely move)
+  for (let i=0;i<50;i++) {
+    const px = ((i*97) - cameraX*0.05) % (W+40);
+    const py = (i*41) % (H*0.55);
+    const tw = 0.3 + 0.3 * Math.abs(Math.sin(globalTime/500 + i));
+    ctx.fillStyle = `rgba(255,255,255,${tw})`;
+    ctx.fillRect(((px+W+40)%(W+40)), py, 1.5, 1.5);
+  }
+
+  // drifting clouds (slow parallax)
+  ctx.fillStyle = COL.cloud;
+  for (let i=0;i<8;i++) {
+    const cw = 40 + (i%3)*14;
+    const px = ((i*260 + globalTime*0.01) - cameraX*0.15) % (W+cw*2) - cw;
+    const py = 20 + (i*37)%70;
+    roundedCloud(px, py, cw, 10);
+  }
+
+  // far mountain silhouette
+  ctx.fillStyle = COL.mountainFar;
+  drawMountainRow(cameraX*0.25, 150, 90, 55, 1);
+
+  // castle silhouette (mid layer)
+  ctx.fillStyle = COL.castle;
+  drawCastle(cameraX*0.4, 178);
+
+  // near mountain silhouette
+  ctx.fillStyle = COL.mountainNear;
+  drawMountainRow(cameraX*0.5, 175, 70, 40, 2);
+
+  ctx.translate(-cameraX + sx, sy);
+
+  for (const s of solids) {
+    switch (s.type) {
+      case 'ground':
+        drawGroundTile(s);
+        if (s.checkpoint) drawCheckpointFlag(s.x+6, s.y);
+        break;
+      case 'fake':
+        if (!vanished.has(s)) drawGroundTile(s);
+        break;
+      case 'plat':
+        drawPlatTile(s);
+        if (s.checkpoint) drawCheckpointFlag(s.x+6, s.y);
+        break;
+      case 'bounce':
+        ctx.fillStyle = '#3ee06b';
+        ctx.fillRect(s.x, s.y, s.w, s.h);
+        ctx.fillStyle = '#1f8a45';
+        ctx.fillRect(s.x, s.y+s.h-3, s.w, 3);
+        break;
+      case 'spike':
+        drawSpikes(s.x, s.y, s.w, s.h, COL.spike, COL.spikeDark);
+        break;
+      case 'hiddenspike':
+        // rendered invisible on purpose - that's the rage joke
+        break;
+      case 'reverserzone':
+        ctx.fillStyle = '#e0218a55';
+        ctx.fillRect(s.x, s.y, s.w, s.h);
+        ctx.fillStyle = '#ffe94a';
+        ctx.font = '7px monospace';
+        ctx.fillText('?', s.x+6, s.y+14);
+        break;
+      case 'flag':
+        ctx.fillStyle = COL.flagPole;
+        ctx.fillRect(s.x, s.y, 3, s.h);
+        ctx.fillStyle = COL.flag;
+        ctx.beginPath();
+        ctx.moveTo(s.x+3, s.y+4);
+        ctx.lineTo(s.x+22, s.y+10);
+        ctx.lineTo(s.x+3, s.y+16);
+        ctx.closePath();
+        ctx.fill();
+        break;
+      case 'fakeflag':
+        ctx.fillStyle = COL.flagPole;
+        ctx.fillRect(s.x, s.y, 3, s.h);
+        ctx.fillStyle = COL.fakeflag;
+        ctx.beginPath();
+        ctx.moveTo(s.x+3, s.y+4);
+        ctx.lineTo(s.x+22, s.y+10);
+        ctx.lineTo(s.x+3, s.y+16);
+        ctx.closePath();
+        ctx.fill();
+        break;
+      default: break; // 'gap' renders nothing (that's the pit)
+    }
+  }
+
+  // particles (world space, behind player)
+  drawParticles();
+
+  // player
+  if (player.alive) drawHero();
+
+  ctx.restore();
+}
+
+function drawHero() {
+  const cx = player.x + player.w/2;
+  const groundY = player.y + player.h;
+
+  // sprint speed lines (world space, behind character)
+  if (player.sprinting) {
+    ctx.strokeStyle = '#ffe94a99';
+    ctx.lineWidth = 1.5;
+    for (let i=0;i<3;i++) {
+      const ly = player.y + 4 + i*6;
+      const lx = player.facing > 0 ? player.x - 2 - i*3 : player.x + player.w + 2 + i*3;
+      const len = 5 + i*2;
+      ctx.beginPath();
+      ctx.moveTo(lx, ly);
+      ctx.lineTo(lx - player.facing*len, ly);
+      ctx.stroke();
+    }
+  }
+
+  ctx.save();
+  const stretch = player.squash; // negative = stretched taller (jump), positive = squashed (land)
+  const scaleY = 1 - stretch*0.04;
+  const scaleX = 1 + stretch*0.04;
+  const bob = player.bob;
+
+  ctx.translate(cx, groundY + bob);
+  ctx.scale(player.facing * scaleX, scaleY);
+  // now local origin is at feet-center, facing right by default
+
+  const legSwing = player.onGround ? Math.sin(player.walkPhase) * 3.2 : 0;
+  const airTuck = !player.onGround ? -2 : 0;
+
+  // cape (behind body), flutters based on vx and time
+  const capeFlap = Math.sin(globalTime/120) * 2 + (player.onGround ? 0 : 3);
+  ctx.fillStyle = COL.capeShade;
+  ctx.beginPath();
+  ctx.moveTo(-3, -18);
+  ctx.lineTo(-7 - capeFlap, -6);
+  ctx.lineTo(-6 - capeFlap*0.6, -1);
+  ctx.lineTo(-3, -5);
+  ctx.closePath();
+  ctx.fill();
+
+  // back leg
+  ctx.fillStyle = COL.boots;
+  ctx.fillRect(-3, -8 + airTuck, 4, 8 - legSwing*0.5);
+
+  // front leg
+  ctx.fillRect(1, -8 + airTuck, 4, 8 + legSwing*0.5);
+
+  // tunic / torso
+  ctx.fillStyle = COL.tunicShade;
+  ctx.fillRect(-5, -19, 10, 12);
+  ctx.fillStyle = COL.tunic;
+  ctx.fillRect(-5, -19, 10, 8);
+  // belt
+  ctx.fillStyle = COL.boots;
+  ctx.fillRect(-5, -10, 10, 2);
+
+  // arms
+  ctx.fillStyle = COL.skinShade;
+  const armSwing = player.onGround ? -legSwing : (player.vy < 0 ? -4 : 2);
+  ctx.fillRect(4, -17, 3, 7 + armSwing*0.3);
+  ctx.fillStyle = COL.skin;
+  ctx.fillRect(-6, -17, 3, 7 - armSwing*0.3);
+
+  // head
+  ctx.fillStyle = COL.skin;
+  ctx.fillRect(-5, -27, 10, 9);
+  // hair
+  ctx.fillStyle = COL.hair;
+  ctx.fillRect(-5, -28, 10, 3);
+  ctx.fillRect(-6, -26, 2, 5);
+  // eye (faces forward/right in local space)
+  ctx.fillStyle = '#1b1140';
+  ctx.fillRect(2, -23, 2, 2);
+
+  ctx.restore();
+}
+
+let last = performance.now();
+function loop(now) {
+  const dt = now - last;
+  last = now;
+  update(dt);
+  render();
+  requestAnimationFrame(loop);
+}
+
+resetPlayerToCheckpoint();
+showBanner("Good luck. You'll need it.\n(Press R to give up gracefully.)", 2200);
+requestAnimationFrame(loop);
+})();
+</script>
+</body>
+</html>
