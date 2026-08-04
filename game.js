@@ -56,8 +56,8 @@ function getScoresApi() {
 
 const banner = document.getElementById('banner');
 const settingsPanel = document.getElementById('settingsPanel');
-const attemptsEl = document.getElementById('attempts');
-const checkpointEl = document.getElementById('checkpoint');
+const attemptsEl = document.getElementById('attemptsText');
+const checkpointEl = document.getElementById('checkpointText');
 const timerEl = document.getElementById('timer');
 const levelEl = document.getElementById('levelIndicator');
 
@@ -670,6 +670,23 @@ function openSettingsPanel() {
   settingsPanel.classList.add('show');
 }
 document.getElementById('settingsLink').addEventListener('click', openSettingsPanel);
+
+// ---------- Pause ----------
+function togglePause() {
+  if (paused) {
+    paused = false;
+    banner.classList.remove('show');
+  } else {
+    paused = true;
+    clearTimeout(bannerTimeout);
+    settingsPanel.classList.remove('show');
+    banner.style.left = '50%'; banner.style.top = '40%'; banner.style.transform = 'translate(-50%, -50%)';
+    banner.innerHTML = '<b>PAUSED</b><br><button id="resumeBtn" class="rq-btn" type="button">RESUME</button>';
+    document.getElementById('resumeBtn').onclick = togglePause;
+    banner.classList.add('show');
+  }
+}
+document.getElementById('pauseLink').addEventListener('click', togglePause);
 
 // ---------- Collision helpers ----------
 function aabb(ax,ay,aw,ah, bx,by,bw,bh) {
