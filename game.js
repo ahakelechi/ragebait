@@ -4,6 +4,56 @@ const ctx = canvas.getContext('2d');
 ctx.imageSmoothingEnabled = false;
 const W = canvas.width, H = canvas.height;
 
+// ---------- Lazy-loaded Firebase (only fetched the first time the leaderboard is
+// actually used, so the core game - which needs zero network - stays fast to load) ----------
+const FIREBASE_CONFIG = {
+  apiKey: "AIzaSyBQt0Le1HCyLmwz5cAizDyyzFE3jKYEXB0",
+  authDomain: "ragebait-high-scores.firebaseapp.com",
+  projectId: "ragebait-high-scores",
+  storageBucket: "ragebait-high-scores.firebasestorage.app",
+  messagingSenderId: "899908365454",
+  appId: "1:899908365454:web:54ead3f26d456e79e1eddf",
+  measurementId: "G-98ZM3XGR14"
+};
+function collectionForDifficulty(difficulty) {
+  const d = ['easy','mild','hard'].includes(difficulty) ? difficulty : 'mild';
+  return 'scores_' + d;
+}
+let scoresApiPromise = null;
+function getScoresApi() {
+  if (!scoresApiPromise) {
+    scoresApiPromise = (async () => {
+      try {
+        const [{ initializeApp }, fs] = await Promise.all([
+          import('https://www.gstatic.com/firebasejs/10.13.2/firebase-app.js'),
+          import('https://www.gstatic.com/firebasejs/10.13.2/firebase-firestore.js')
+        ]);
+        const app = initializeApp(FIREBASE_CONFIG);
+        const db = fs.getFirestore(app);
+        return {
+          async submit(name, time, attempts, difficulty) {
+            await fs.addDoc(fs.collection(db, collectionForDifficulty(difficulty)), { name, time, attempts, ts: fs.serverTimestamp() });
+          },
+          async top10(difficulty) {
+            const q = fs.query(fs.collection(db, collectionForDifficulty(difficulty)), fs.orderBy('time','asc'), fs.limit(10));
+            const snap = await fs.getDocs(q);
+            return snap.docs.map(d => d.data());
+          },
+          async rank(time, difficulty) {
+            const q = fs.query(fs.collection(db, collectionForDifficulty(difficulty)), fs.where('time','<',time));
+            const snap = await fs.getCountFromServer(q);
+            return snap.data().count + 1;
+          }
+        };
+      } catch (e) {
+        console.warn('Firebase init failed, leaderboard disabled.', e);
+        return null;
+      }
+    })();
+  }
+  return scoresApiPromise;
+}
+
 const banner = document.getElementById('banner');
 const settingsPanel = document.getElementById('settingsPanel');
 const attemptsEl = document.getElementById('attempts');
@@ -128,9 +178,14 @@ let revealedHazard = null; // the specific hidden hazard that just killed you, s
 function diffParams() { return DIFFICULTY_PARAMS[Settings.difficulty] || DIFFICULTY_PARAMS.mild; }
 function togglespikeOn(t) { return Math.floor(t / diffParams().togglespikePeriod) % 2 === 0; }
 
+// ---------- Reduced motion ----------
+const REDUCED_MOTION = !!(window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches);
+function bumpShake(v) { shake = Math.max(shake, REDUCED_MOTION ? v * 0.2 : v); }
+
 // ---------- Particles ----------
 let particles = [];
 function spawnParticles(x, y, n, color, opts={}) {
+  if (REDUCED_MOTION) n = Math.ceil(n * 0.3);
   for (let i=0;i<n;i++) {
     particles.push({
       x, y,
@@ -286,7 +341,7 @@ function die(reason, hazard) {
   player.alive = false;
   deathFreeze = true;
   revealedHazard = hazard || null;
-  shake = 14;
+  bumpShake(14);
   sfx.death();
   spawnParticles(player.x+player.w/2, player.y+player.h/2, 16, '#ff4a4a', {spread:3, up:1, size:2.5});
   if (hazard) {
@@ -296,6 +351,7 @@ function die(reason, hazard) {
   attemptsEl.textContent = 'ATTEMPT: ' + attempts;
   const quip = deathQuips[Math.floor(Math.random()*deathQuips.length)];
   showBanner((reason ? reason + "\n" : "") + quip, 1400);
+  setShareInfo('RAGE QUEST', [quip, 'Attempt ' + attempts + ', ' + Settings.difficulty.toUpperCase()]);
   setTimeout(() => {
     resetPlayerToCheckpoint();
   }, 900);
@@ -312,7 +368,7 @@ function nextLevel() {
   levelEl.textContent = 'LEVEL: ' + (currentLevelIndex+1) + '/' + LEVELS.length;
   resetPlayerToCheckpoint();
   sfx.levelComplete();
-  flashAlpha = 1;
+  flashAlpha = REDUCED_MOTION ? 0.15 : 1;
   showBanner('LEVEL ' + currentLevelIndex + ' COMPLETE', 1500);
 }
 
@@ -355,14 +411,67 @@ function openLeaderboardOverlay() {
       });
     };
     setContent('Loading...<br>');
-    if (!window.__scores) { setContent('Leaderboard unavailable.<br>'); return; }
-    window.__scores.top10(viewDifficulty)
-      .then(rows => setContent(boardRowsHtml(rows)))
-      .catch(() => setContent('Leaderboard unavailable.<br>'));
+    getScoresApi().then(api => {
+      if (!api) { setContent('Leaderboard unavailable.<br>'); return; }
+      api.top10(viewDifficulty)
+        .then(rows => setContent(boardRowsHtml(rows)))
+        .catch(() => setContent('Leaderboard unavailable.<br>'));
+    });
   };
   load();
 }
 document.getElementById('boardLink').addEventListener('click', openLeaderboardOverlay);
+
+// ---------- Shareable outcome card ----------
+// Composites the current canvas frame + a text strip into one PNG and hands it to
+// the OS share sheet (mobile) or downloads it (desktop) - no server involved.
+const shareLink = document.getElementById('shareLink');
+let lastShareInfo = null;
+
+function setShareInfo(heading, lines) {
+  lastShareInfo = { heading, lines };
+  shareLink.style.display = 'inline';
+}
+
+async function shareCard() {
+  if (!lastShareInfo) return;
+  const scale = 2;
+  const stripH = 70;
+  const off = document.createElement('canvas');
+  off.width = W * scale;
+  off.height = (H + stripH) * scale;
+  const octx = off.getContext('2d');
+  octx.scale(scale, scale);
+  octx.fillStyle = '#0d0221';
+  octx.fillRect(0, 0, W, H + stripH);
+  octx.drawImage(canvas, 0, 0, W, H);
+  octx.fillStyle = '#0d0221dd';
+  octx.fillRect(0, H, W, stripH);
+  octx.textAlign = 'center';
+  octx.fillStyle = '#ffe94a';
+  octx.font = 'bold 14px monospace';
+  octx.fillText(lastShareInfo.heading, W/2, H + 18);
+  octx.font = '9px monospace';
+  octx.fillStyle = '#ffffff';
+  lastShareInfo.lines.forEach((line, i) => octx.fillText(line, W/2, H + 34 + i*12));
+
+  off.toBlob(async blob => {
+    if (!blob) return;
+    const file = new File([blob], 'rage-quest.png', { type: 'image/png' });
+    if (navigator.canShare && navigator.canShare({ files: [file] })) {
+      try {
+        await navigator.share({ files: [file], title: 'Rage Quest', text: lastShareInfo.lines.join(' — ') });
+        return;
+      } catch (e) { /* user cancelled or share failed - fall through to download */ }
+    }
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = 'rage-quest.png';
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 2000);
+  }, 'image/png');
+}
+shareLink.addEventListener('click', shareCard);
 
 // ---------- Docked live leaderboard (periodic refresh, left/right dockable) ----------
 const liveBoard = document.getElementById('liveBoard');
@@ -385,9 +494,10 @@ function renderLiveBoardRows(rows) {
 }
 
 async function refreshLiveBoard() {
-  if (!window.__scores) { liveBoard.textContent = 'Leaderboard unavailable.'; return; }
+  const api = await getScoresApi();
+  if (!api) { liveBoard.textContent = 'Leaderboard unavailable.'; return; }
   try {
-    const rows = await window.__scores.top10(viewDifficulty);
+    const rows = await api.top10(viewDifficulty);
     renderLiveBoardRows(rows);
   } catch (e) {
     liveBoard.textContent = 'Leaderboard unavailable.';
@@ -442,6 +552,11 @@ function showWinBanner() {
   const header = '...wait, that was the REAL flag?<br>You actually made it.<br>' +
     'Time: ' + elapsed.toFixed(1) + 's over ' + attempts + ' attempt(s), on ' + Settings.difficulty.toUpperCase() + '.<br><br>';
 
+  setShareInfo('RAGE QUEST — BEATEN', [
+    elapsed.toFixed(1) + 's, ' + attempts + ' attempt(s)',
+    Settings.difficulty.toUpperCase() + (usedPractice ? ' (practice)' : '')
+  ]);
+
   if (usedPractice) {
     banner.innerHTML = header + "Practice-mode runs aren't eligible for the leaderboard.";
     return;
@@ -458,17 +573,18 @@ function showWinBanner() {
     const name = (input.value || 'ANON').trim().slice(0,12) || 'ANON';
     localStorage.setItem('rq_name', name);
     const msg = document.getElementById('scoreMsg');
-    if (!window.__scores) { msg.textContent = 'Leaderboard unavailable.'; return; }
     msg.textContent = 'Submitting...';
     const diff = Settings.difficulty;
     try {
-      await window.__scores.submit(name, elapsed, attempts, diff);
+      const api = await getScoresApi();
+      if (!api) { msg.textContent = 'Leaderboard unavailable.'; return; }
+      await api.submit(name, elapsed, attempts, diff);
       msg.textContent = 'Submitted!';
-      const rows = await window.__scores.top10(diff);
+      const rows = await api.top10(diff);
       let html = '<br><b>TOP 10 (' + diff.toUpperCase() + ')</b><br>' + boardRowsHtml(rows);
       const inTop10 = rows.some(r => r.time === elapsed && r.attempts === attempts);
       if (!inTop10) {
-        const rank = await window.__scores.rank(elapsed, diff);
+        const rank = await api.rank(elapsed, diff);
         html += 'YOUR RANK: #' + rank + '<br>';
       }
       banner.insertAdjacentHTML('beforeend', html);
@@ -705,7 +821,7 @@ function update(dt) {
       vanished.add(s);
       crumbleState.delete(s);
       sfx.fake();
-      shake = Math.max(shake, 6);
+      bumpShake(6);
       spawnParticles(s.x + s.w/2, s.y + s.h/2, 10, '#ff5cb3', {spread:2, size:2});
     } else {
       crumbleState.set(s, nt);
@@ -753,12 +869,12 @@ function onLand(s) {
   if (s.type === 'fake' && !vanished.has(s)) {
     vanished.add(s);
     sfx.fake();
-    shake = 6;
+    bumpShake(6);
     spawnParticles(player.x+player.w/2, player.y+player.h, 10, '#ff5cb3', {spread:2, size:2});
   }
   if (s.type === 'crumble' && !vanished.has(s) && !crumbleState.has(s)) {
     crumbleState.set(s, diffParams().crumbleMs);
-    shake = Math.max(shake, 3);
+    bumpShake(3);
   }
   if (s.type === 'bounce') {
     player.vy = -11;

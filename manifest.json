@@ -1,0 +1,15 @@
+{
+  "name": "Rage Quest: The Kind Kingdom",
+  "short_name": "Rage Quest",
+  "description": "A tiny 16-bit-style browser rage-platformer built with HTML5 Canvas.",
+  "start_url": "./index.html",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "landscape",
+  "background_color": "#0d0221",
+  "theme_color": "#0d0221",
+  "icons": [
+    { "src": "icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" },
+    { "src": "icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "maskable" }
+  ]
+}

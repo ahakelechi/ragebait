@@ -17,6 +17,15 @@
   --col-input-border: #ffe94a88;
 }
 
+:focus-visible {
+  outline: 3px solid var(--col-accent3);
+  outline-offset: 2px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .flicker { animation: none; }
+}
+
 @font-face {
   font-family: 'Retro';
   src: local('Courier New');

@@ -4,6 +4,21 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
 <title>RAGE QUEST: The Kind Kingdom</title>
+<meta name="description" content="A tiny 16-bit-style browser rage-platformer built with HTML5 Canvas. It lies to you. Constantly.">
+<meta name="theme-color" content="#0d0221">
+<link rel="icon" href="icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="icon.svg">
+<link rel="manifest" href="manifest.json">
+
+<meta property="og:type" content="website">
+<meta property="og:title" content="RAGE QUEST: The Kind Kingdom">
+<meta property="og:description" content="A tiny 16-bit-style browser rage-platformer. Fake platforms, invisible spikes, a fake victory flag - it lies to you, constantly.">
+<meta property="og:image" content="og-image.svg">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="RAGE QUEST: The Kind Kingdom">
+<meta name="twitter:description" content="A tiny 16-bit-style browser rage-platformer. It lies to you, constantly.">
+<meta name="twitter:image" content="og-image.svg">
+
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
@@ -15,32 +30,33 @@
       <div id="hud">
         <span id="attempts">ATTEMPT: 1</span>
         <span id="levelIndicator">LEVEL: 1/2</span>
-        <span id="checkpoint">CHECKPOINT: START</span>
+        <span id="checkpoint" aria-live="polite">CHECKPOINT: START</span>
         <span id="timer">TIME: 0.0s</span>
       </div>
       <div style="position:relative;">
         <canvas id="game" width="480" height="270"></canvas>
-        <div id="banner"></div>
+        <div id="banner" role="status" aria-live="polite"></div>
       </div>
     </div>
     <div id="liveBoard"></div>
   </div>
-  <div id="settingsPanel"></div>
+  <div id="settingsPanel" role="dialog" aria-label="Settings"></div>
   <div id="controls">ARROW KEYS / A-D TO MOVE · SPACE OR UP TO JUMP · HOLD SHIFT TO SPRINT · R TO RESTART LEVEL</div>
   <div id="linkRow">
     <button id="boardLink" class="rq-link" type="button">VIEW LEADERBOARD</button>
     <button id="liveBoardToggle" class="rq-link" type="button">LIVE BOARD</button>
-    <button id="settingsLink" class="rq-link" type="button">⚙ SETTINGS</button>
+    <button id="settingsLink" class="rq-link" type="button" aria-label="Settings">⚙ SETTINGS</button>
+    <button id="shareLink" class="rq-link" type="button" style="display:none;">📤 SHARE</button>
   </div>
   <div id="touchControls">
     <div class="tc-row">
-      <button id="btnLeft" class="tcbtn" type="button">◀</button>
-      <button id="btnRight" class="tcbtn" type="button">▶</button>
+      <button id="btnLeft" class="tcbtn" type="button" aria-label="Move left">◀</button>
+      <button id="btnRight" class="tcbtn" type="button" aria-label="Move right">▶</button>
     </div>
     <div class="tc-row">
-      <button id="btnSprint" class="tcbtn" type="button">⚡</button>
-      <button id="btnJump" class="tcbtn" type="button">⬆</button>
-      <button id="btnRestart" class="tcbtn" type="button">⟲</button>
+      <button id="btnSprint" class="tcbtn" type="button" aria-label="Sprint">⚡</button>
+      <button id="btnJump" class="tcbtn" type="button" aria-label="Jump">⬆</button>
+      <button id="btnRestart" class="tcbtn" type="button" aria-label="Restart level">⟲</button>
     </div>
   </div>
 </div>
@@ -48,48 +64,5 @@
 <script src="settings.js"></script>
 <script src="levels.js"></script>
 <script src="game.js"></script>
-
-<script type="module">
-import { initializeApp } from "https://www.gstatic.com/firebasejs/10.13.2/firebase-app.js";
-import { getFirestore, collection, addDoc, getDocs, getCountFromServer, query, orderBy, limit, where, serverTimestamp }
-  from "https://www.gstatic.com/firebasejs/10.13.2/firebase-firestore.js";
-
-const firebaseConfig = {
-  apiKey: "AIzaSyBQt0Le1HCyLmwz5cAizDyyzFE3jKYEXB0",
-  authDomain: "ragebait-high-scores.firebaseapp.com",
-  projectId: "ragebait-high-scores",
-  storageBucket: "ragebait-high-scores.firebasestorage.app",
-  messagingSenderId: "899908365454",
-  appId: "1:899908365454:web:54ead3f26d456e79e1eddf",
-  measurementId: "G-98ZM3XGR14"
-};
-
-function collectionForDifficulty(difficulty) {
-  const d = ['easy', 'mild', 'hard'].includes(difficulty) ? difficulty : 'mild';
-  return 'scores_' + d;
-}
-
-try {
-  const app = initializeApp(firebaseConfig);
-  const db = getFirestore(app);
-  window.__scores = {
-    async submit(name, time, attempts, difficulty) {
-      await addDoc(collection(db, collectionForDifficulty(difficulty)), { name, time, attempts, ts: serverTimestamp() });
-    },
-    async top10(difficulty) {
-      const q = query(collection(db, collectionForDifficulty(difficulty)), orderBy('time', 'asc'), limit(10));
-      const snap = await getDocs(q);
-      return snap.docs.map(d => d.data());
-    },
-    async rank(time, difficulty) {
-      const q = query(collection(db, collectionForDifficulty(difficulty)), where('time', '<', time));
-      const snap = await getCountFromServer(q);
-      return snap.data().count + 1;
-    }
-  };
-} catch (e) {
-  console.warn('Firebase init failed, leaderboard disabled.', e);
-}
-</script>
 </body>
 </html>
