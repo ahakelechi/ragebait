@@ -2,6 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
 <title>RAGE QUEST: The Kind Kingdom</title>
 <style>
   @font-face {
@@ -10,7 +11,7 @@
   }
   * { box-sizing: border-box; }
   html, body {
-    margin: 0; padding: 0; height: 100%;
+    margin: 0; padding: 0; width: 100%; height: 100%;
     background: #0d0221;
     display: flex; align-items: center; justify-content: center;
     font-family: 'Press Start 2P', 'Courier New', monospace;
@@ -21,6 +22,7 @@
     flex-direction: column;
     align-items: center;
     gap: 10px;
+    transform-origin: center center;
   }
   #title {
     color: #ffe94a;
@@ -93,6 +95,46 @@
     from { opacity: 1; }
     to { opacity: 0.7; }
   }
+  #boardLink {
+    color: #7de3ff;
+    font-size: 8px;
+    letter-spacing: 1px;
+    text-align: center;
+    text-decoration: underline;
+    cursor: pointer;
+    margin-top: -4px;
+  }
+  #touchControls {
+    display: none;
+    flex-direction: column;
+    align-items: center;
+    gap: 8px;
+  }
+  .has-touch #touchControls { display: flex; }
+  .tc-row { display: flex; gap: 14px; }
+  .tcbtn {
+    width: 52px; height: 52px;
+    font-size: 20px;
+    background: linear-gradient(#3a2a6d, #1b1140);
+    border: 3px solid #ffe94a;
+    border-radius: 10px;
+    color: #ffe94a;
+    display: flex; align-items: center; justify-content: center;
+    user-select: none; -webkit-user-select: none; touch-action: none;
+    padding: 0;
+  }
+  .tcbtn:active { background: #e0218a55; }
+  .rq-input {
+    font-family: inherit; font-size: 10px; padding: 4px; width: 90px;
+    text-align: center; background: #0d0221; color: #ffe94a;
+    border: 1px solid #ffe94a88; border-radius: 3px;
+  }
+  .rq-btn {
+    font-family: inherit; font-size: 9px; padding: 6px 12px; margin-left: 6px;
+    background: #3a2a6d; color: #ffe94a; border: 2px solid #ffe94a;
+    border-radius: 4px; cursor: pointer;
+  }
+  .rq-btn:active { background: #e0218a55; }
 </style>
 </head>
 <body>
@@ -111,6 +153,18 @@
     </div>
   </div>
   <div id="controls">ARROW KEYS / A-D TO MOVE · SPACE OR UP TO JUMP · HOLD SHIFT TO SPRINT · R TO RESTART LEVEL</div>
+  <div id="boardLink">VIEW LEADERBOARD</div>
+  <div id="touchControls">
+    <div class="tc-row">
+      <button id="btnLeft" class="tcbtn" type="button">◀</button>
+      <button id="btnRight" class="tcbtn" type="button">▶</button>
+    </div>
+    <div class="tc-row">
+      <button id="btnSprint" class="tcbtn" type="button">⚡</button>
+      <button id="btnJump" class="tcbtn" type="button">⬆</button>
+      <button id="btnRestart" class="tcbtn" type="button">⟲</button>
+    </div>
+  </div>
 </div>
 
 <script>
@@ -296,6 +350,36 @@ window.addEventListener('keydown', e => {
 });
 window.addEventListener('keyup', e => keys[e.key.toLowerCase()] = false);
 
+// ---------- Responsive scaling ----------
+const wrapEl = document.getElementById('wrap');
+function fitToViewport() {
+  const margin = 16;
+  const naturalW = wrapEl.offsetWidth;
+  const naturalH = wrapEl.offsetHeight;
+  const availW = window.innerWidth - margin*2;
+  const availH = window.innerHeight - margin*2;
+  const scale = Math.min(availW / naturalW, availH / naturalH);
+  wrapEl.style.transform = 'scale(' + scale + ')';
+}
+window.addEventListener('resize', fitToViewport);
+window.addEventListener('orientationchange', fitToViewport);
+
+// ---------- Touch controls ----------
+if (('ontouchstart' in window) || navigator.maxTouchPoints > 0) {
+  document.body.classList.add('has-touch');
+}
+function bindTouchButton(el, keyName) {
+  const set = v => e => { e.preventDefault(); keys[keyName] = v; };
+  el.addEventListener('touchstart', set(true), {passive:false});
+  el.addEventListener('touchend', set(false), {passive:false});
+  el.addEventListener('touchcancel', set(false), {passive:false});
+}
+bindTouchButton(document.getElementById('btnLeft'), 'arrowleft');
+bindTouchButton(document.getElementById('btnRight'), 'arrowright');
+bindTouchButton(document.getElementById('btnJump'), ' ');
+bindTouchButton(document.getElementById('btnSprint'), 'shift');
+document.getElementById('btnRestart').addEventListener('touchstart', e => { e.preventDefault(); restartLevel(true); });
+
 function showBanner(msg, ms=1600) {
   banner.textContent = msg;
   banner.classList.add('show');
@@ -345,11 +429,66 @@ function die(reason) {
   }, 900);
 }
 
+// ---------- Leaderboard ----------
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+function boardRowsHtml(rows) {
+  if (!rows.length) return '(no scores yet)<br>';
+  return rows.map((r,i) => (i+1)+'. '+escapeHtml(r.name)+' — '+r.time.toFixed(1)+'s ('+r.attempts+' att)<br>').join('');
+}
+function openLeaderboardOverlay() {
+  clearTimeout(bannerTimeout);
+  banner.classList.add('show');
+  banner.style.left = '50%'; banner.style.top = '40%'; banner.style.transform = 'translate(-50%, -50%)';
+  const setContent = bodyHtml => {
+    banner.innerHTML = '<b>TOP 10</b><br>' + bodyHtml +
+      '<button id="closeBoardBtn" class="rq-btn" type="button">CLOSE</button>';
+    document.getElementById('closeBoardBtn').onclick = () => banner.classList.remove('show');
+  };
+  setContent('Loading...<br>');
+  if (!window.__scores) { setContent('Leaderboard unavailable.<br>'); return; }
+  window.__scores.top10()
+    .then(rows => setContent(boardRowsHtml(rows)))
+    .catch(() => setContent('Leaderboard unavailable.<br>'));
+}
+document.getElementById('boardLink').addEventListener('click', openLeaderboardOverlay);
+
 function win() {
   if (won) return;
   won = true;
   sfx.win();
-  showBanner("...wait, that was the REAL flag?\nYou actually made it.\nTime: " + elapsed.toFixed(1) + "s over " + attempts + " attempt(s).", 5000);
+  showWinBanner();
+}
+
+function showWinBanner() {
+  banner.classList.add('show');
+  banner.style.left = '50%'; banner.style.top = '40%'; banner.style.transform = 'translate(-50%, -50%)';
+  clearTimeout(bannerTimeout);
+  const savedName = localStorage.getItem('rq_name') || '';
+  banner.innerHTML =
+    '...wait, that was the REAL flag?<br>You actually made it.<br>' +
+    'Time: ' + elapsed.toFixed(1) + 's over ' + attempts + ' attempt(s).<br><br>' +
+    '<input id="nameInput" class="rq-input" maxlength="12" placeholder="name" value="' + escapeHtml(savedName) + '">' +
+    '<button id="submitScoreBtn" class="rq-btn" type="button">SUBMIT</button>' +
+    '<div id="scoreMsg" style="font-size:8px;margin-top:6px;min-height:10px;"></div>';
+
+  document.getElementById('submitScoreBtn').onclick = async () => {
+    const input = document.getElementById('nameInput');
+    const name = (input.value || 'ANON').trim().slice(0,12) || 'ANON';
+    localStorage.setItem('rq_name', name);
+    const msg = document.getElementById('scoreMsg');
+    if (!window.__scores) { msg.textContent = 'Leaderboard unavailable.'; return; }
+    msg.textContent = 'Submitting...';
+    try {
+      await window.__scores.submit(name, elapsed, attempts);
+      msg.textContent = 'Submitted!';
+      const rows = await window.__scores.top10();
+      banner.insertAdjacentHTML('beforeend', '<br><b>TOP 10</b><br>' + boardRowsHtml(rows));
+    } catch (e) {
+      msg.textContent = 'Leaderboard unavailable.';
+    }
+  };
 }
 
 // ---------- Collision helpers ----------
@@ -816,8 +955,42 @@ function loop(now) {
 
 resetPlayerToCheckpoint();
 showBanner("Good luck. You'll need it.\n(Press R to give up gracefully.)", 2200);
+fitToViewport();
 requestAnimationFrame(loop);
 })();
+</script>
+
+<script type="module">
+import { initializeApp } from "https://www.gstatic.com/firebasejs/10.13.2/firebase-app.js";
+import { getFirestore, collection, addDoc, getDocs, query, orderBy, limit, serverTimestamp }
+  from "https://www.gstatic.com/firebasejs/10.13.2/firebase-firestore.js";
+
+const firebaseConfig = {
+  apiKey: "AIzaSyBQt0Le1HCyLmwz5cAizDyyzFE3jKYEXB0",
+  authDomain: "ragebait-high-scores.firebaseapp.com",
+  projectId: "ragebait-high-scores",
+  storageBucket: "ragebait-high-scores.firebasestorage.app",
+  messagingSenderId: "899908365454",
+  appId: "1:899908365454:web:54ead3f26d456e79e1eddf",
+  measurementId: "G-98ZM3XGR14"
+};
+
+try {
+  const app = initializeApp(firebaseConfig);
+  const db = getFirestore(app);
+  window.__scores = {
+    async submit(name, time, attempts) {
+      await addDoc(collection(db, 'scores'), { name, time, attempts, ts: serverTimestamp() });
+    },
+    async top10() {
+      const q = query(collection(db, 'scores'), orderBy('time', 'asc'), limit(10));
+      const snap = await getDocs(q);
+      return snap.docs.map(d => d.data());
+    }
+  };
+} catch (e) {
+  console.warn('Firebase init failed, leaderboard disabled.', e);
+}
 </script>
 </body>
 </html>
